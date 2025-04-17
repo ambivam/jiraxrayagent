@@ -53,6 +53,10 @@ class CreateJiraTestTool(BaseTool):
     name: str = "create_jira_test"
     description: str = "Creates a new test issue in JIRA, sets its test type, and adds scenario steps as Xray test steps"
 
+    def __init__(self):
+        super().__init__()
+        load_dotenv()  # Ensure environment variables are loaded when tool is initialized
+
     def set_test_type_graphql(self, issue_key: str, test_type: str, token: str):
         url = "https://xray.cloud.getxray.app/api/v2/graphql"
         headers = {
@@ -172,13 +176,6 @@ agent = initialize_agent(
     verbose=True
 )
 
-# Example run
-if __name__ == "__main__":
-    input_prompt = str(input("Enter any of the following similar prompts:\n"+ str(["Parse 'features/payment.feature' and create corresponding test issues in JIRA \n",
-                              "Read the feature file 'features/signup.feature' and generate JIRA tests for each scenario \n",
-                              "Convert all scenarios in 'features/login.feature' into JIRA tests with steps \n",
-                              "Create test cases in JIRA based on scenarios from 'features/orders.feature' \n" ])+"\n"))
-    #prompt = "{Create test issues in JIRA from the scenarios in '"+input_prompt+"'}"
-    prompt = input_prompt
-    result = agent.run(prompt)
-    print(result)
+# Comment out or remove the example run section since we're using Streamlit now
+# if __name__ == "__main__":
+#     ... remove this section ...
