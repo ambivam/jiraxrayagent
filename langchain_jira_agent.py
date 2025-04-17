@@ -58,7 +58,7 @@ class CreateJiraTestTool(BaseTool):
                                             "type": "paragraph",
                                             "content": [
                                                 {
-                                                    "text": "Created by LangChain agent",
+                                                    "text": scenario['title'],
                                                     "type": "text"
                                                 }
                                             ]
