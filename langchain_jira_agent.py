@@ -40,8 +40,7 @@ class CreateJiraTestTool(BaseTool):
     description: str = "Creates a new test issue in JIRA and adds steps to it"
 
     def _run(self, feature_file_path: str):
-        scenarios = parse_feature_file(feature_file_path)
-        #token = authenticate().get('token')
+        scenarios = parse_feature_file(feature_file_path)        
         token = authenticate()
 
         results = []
