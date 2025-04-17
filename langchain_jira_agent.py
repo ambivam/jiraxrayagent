@@ -34,6 +34,50 @@ def parse_feature_file(file_path):
 
     return parsed_scenarios
 
+# Function to create Atlassian Document Format (ADF) description with message and steps
+def create_adf_paragraph(message, steps):
+    content = [
+        {
+            "type": "paragraph",
+            "content": [
+                {
+                    "text": message,
+                    "type": "text"
+                }
+            ]
+        }
+    ]
+
+    if steps:
+        step_list_content = []
+        for step in steps:
+            step_list_content.append({
+                "type": "listItem",
+                "content": [
+                    {
+                        "type": "paragraph",
+                        "content": [
+                            {
+                                "text": step,
+                                "type": "text"
+                            }
+                        ]
+                    }
+                ]
+            })
+
+        content.append({
+            "type": "bulletList",
+            "content": step_list_content
+        })
+
+    return {
+        "type": "doc",
+        "version": 1,
+        "content": content
+    }
+
+
 # LangChain Tool to create a test in JIRA
 class CreateJiraTestTool(BaseTool):
     name: str = "create_jira_test"
@@ -45,25 +89,21 @@ class CreateJiraTestTool(BaseTool):
 
         results = []
         for scenario in scenarios:
+
+            # Prepare test steps payload for Xray
+            steps_payload = []
+            for step in scenario['steps']:
+                steps_payload.append({
+                    "action": step,
+                    "result": "Expected outcome to be defined"
+                })
+
+            # Create JIRA issue with steps included in descriptions
             payload = {
                             "fields": {
                                 "project": {"key": os.getenv("JIRA_PROJECT_KEY")},
                                 "summary": scenario['title'],
-                                "description": {
-                                    "type": "doc",
-                                    "version": 1,
-                                    "content": [
-                                        {
-                                            "type": "paragraph",
-                                            "content": [
-                                                {
-                                                    "text": scenario['title'],
-                                                    "type": "text"
-                                                }
-                                            ]
-                                        }
-                                    ]
-                                },
+                                "description": create_adf_paragraph(scenario['title'], scenario['steps']),
                                 "issuetype": {"name": "Test"}
                             }
             }
@@ -72,14 +112,11 @@ class CreateJiraTestTool(BaseTool):
             print("THE ISSUE KEY IS :",response.json())
             
             if issue_key:
-                steps_payload = []
-                for step in scenario['steps']:
-                    steps_payload.append({
-                        "action": step,
-                        "result": "Expected outcome to be defined"
-                    })
+                # Add test steps to Xray test case
                 add_test_steps(issue_key, steps_payload, token)
-                results.append(f"Created {issue_key} with {len(steps_payload)} steps")
+                results.append(f"✅ Created {issue_key} with {len(steps_payload)} steps")
+            else:
+                results.append(f"❌ Failed to create issue for scenario: {scenario['title']}")
 
         return "\n".join(results)
 
