@@ -143,3 +143,45 @@ def get_test_by_key(test_key, token):
     '''
     return graphql_request(query, token)
 
+def set_test_type(test_key, test_type, token):
+    ALLOWED_TEST_TYPES = ["Manual", "Generic", "Cucumber", "Automated"]
+
+    if test_type not in ALLOWED_TEST_TYPES:
+        raise ValueError(f"Invalid test type: {test_type}. Allowed types: {ALLOWED_TEST_TYPES}")
+
+    query = f'''
+    mutation {{
+      updateTest(
+        issueKey: "{test_key}",
+        testType: {{
+          name: "{test_type}"
+        }}
+      ) {{
+        test {{
+          issueId
+          testType {{
+            name
+          }}
+        }}
+      }}
+    }}
+    '''
+
+    response = graphql_request(query, token)
+
+    # Check if response is OK and content is JSON
+    if response.status_code != 200:
+        print(f"❌ GraphQL failed with status {response.status_code}: {response.text}")
+        return response  # early return — don't parse JSON
+
+    try:
+        json_data = response.json()
+    except ValueError:
+        print("❌ GraphQL response is not valid JSON:")
+        print(response.text)
+        return response  # early return — invalid JSON
+
+    if "errors" in json_data:
+        print("❌ GraphQL returned errors:", json_data["errors"])
+
+    return response
