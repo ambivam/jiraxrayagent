@@ -134,7 +134,8 @@ class CreateJiraTestTool(BaseTool):
                 # Add steps                
                 gherkin_steps = build_gherkin(scenario)
                 # Wrap in triple quotes
-                formatted_gherkin = f"""\"\"\"\n{gherkin_steps}\"\"\""""              
+                #formatted_gherkin = f"""\"\"\"\n{gherkin_steps}\"\"\""""  
+                formatted_gherkin = f"""{gherkin_steps}"""             
                 update_gherkin_for_issue(issue_key, formatted_gherkin,token)
 
                 results.append(f"✅ Created Cucumber test {issue_key} with {len(scenario['steps'])} steps")

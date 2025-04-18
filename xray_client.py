@@ -429,6 +429,7 @@ def get_test_type(issue_id,token):
 # Function to update the Gherkin steps
 def update_gherkin_steps(issue_id, gherkin_steps,token):
     print("************************************INTO update_gherkin_steps*********************************")
+    print(gherkin_steps)
     token = token.strip('"') 
     headers = {
         "Authorization": f'Bearer {token}',
@@ -438,7 +439,9 @@ def update_gherkin_steps(issue_id, gherkin_steps,token):
     # Escape newlines for GraphQL string
     #gherkin_steps_escaped = gherkin_steps.replace("\n", "\\n")
     #gherkin_steps_escaped = gherkin_steps.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n")
-    gherkin_steps_escaped = json.dumps(gherkin_steps)
+    #gherkin_steps_escaped = json.dumps(gherkin_steps)
+    
+    gherkin_steps_escaped = gherkin_steps.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n')
 
     mutation = f"""
     mutation {{
@@ -451,6 +454,10 @@ def update_gherkin_steps(issue_id, gherkin_steps,token):
     }}
     """
     payload = {'query': mutation}
+
+    print("GraphQL Mutation:")
+    print(mutation)
+
     response = requests.post(BASE_URL, headers=headers, json=payload)
 
     if response.status_code == 200:
