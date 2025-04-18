@@ -11,11 +11,13 @@ from langchain.prompts import MessagesPlaceholder
 from langchain.memory import ConversationBufferMemory
 import requests
 from jira_client import create_issue
-from xray_client import authenticate, add_test_steps, get_issue_id_from_key, set_cucumber_type, get_multiple_issue_ids, set_multiple_cucumber_types
+from xray_client import authenticate, add_test_steps, build_gherkin, get_issue_id, get_issue_id_from_key, set_cucumber_type, get_multiple_issue_ids, set_multiple_cucumber_types, update_gherkin_for_issue, update_test_type_to_cucumber
 from cucumber_test_creator import create_cucumber_test
 
 # Load environment variables
 load_dotenv()
+
+BASE_URL = 'https://xray.cloud.getxray.app/api/v2/graphql'
 
 # Function to parse Gherkin feature files
 def parse_feature_file(file_path):
@@ -112,34 +114,35 @@ class CreateJiraTestTool(BaseTool):
 
                 issue_data = response.json()
                 issue_key = issue_data.get('key')
+                print("*******************THE ISSUE KEY IS:*********************************", issue_key)
                 if not issue_key:
                     results.append("❌ No issue key in response")
                     continue
 
                 # Get issue ID and set as Cucumber
-                issue_id = get_issue_id_from_key(issue_key, token)
+                issue_id = get_issue_id(issue_key, token)
+                print("*******************THE ISSUE ID IS:*********************************", issue_id)
                 if not issue_id:
                     results.append(f"❌ Failed to get issue ID for {issue_key}")
                     continue
 
                 # Set as Cucumber test
-                if not set_cucumber_type(issue_id, token):
+                if not update_test_type_to_cucumber(issue_id, token):
                     results.append(f"❌ Failed to set Cucumber type for {issue_key}")
                     continue
 
-                # Add steps
-                steps = [{"action": step, "result": "Expected outcome"} for step in scenario['steps']]
-                steps_response = add_test_steps(issue_id, steps, token)
-                if "errors" in steps_response:
-                    results.append(f"❌ Failed to add steps for {issue_key}")
-                    continue
+                # Add steps                
+                gherkin_steps = build_gherkin(scenario)
+                # Wrap in triple quotes
+                formatted_gherkin = f"""\"\"\"\n{gherkin_steps}\"\"\""""              
+                update_gherkin_for_issue(issue_key, formatted_gherkin,token)
 
-                results.append(f"✅ Created Cucumber test {issue_key} with {len(steps)} steps")
+                results.append(f"✅ Created Cucumber test {issue_key} with {len(scenario['steps'])} steps")
 
             except Exception as e:
                 print(f"Error processing scenario: {str(e)}")
                 results.append(f"❌ Error: {str(e)}")
-
+        
         return "\n".join(results)
 
     def _arun(self, *args, **kwargs):

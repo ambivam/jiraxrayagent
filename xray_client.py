@@ -12,6 +12,7 @@ XRAY_CLIENT_ID = os.getenv("XRAY_CLIENT_ID")
 XRAY_CLIENT_SECRET = os.getenv("XRAY_CLIENT_SECRET")
 
 XRAY_API_BASE = "https://xray.cloud.getxray.app/api/v2"
+BASE_URL = 'https://xray.cloud.getxray.app/api/v2/graphql'
 
 def authenticate():
     response = requests.post(
@@ -198,6 +199,89 @@ def get_issue_id_from_key(test_key: str, token: str) -> str:
         print(f"Error getting issue ID: {str(e)}")
         return None
 
+# Build Cucumber steps
+def build_gherkin(scenario):
+    gherkin = f"  Scenario: {scenario['title']}\n"    
+    for step in scenario['steps']:
+        gherkin += f"    {step}\n"
+    return gherkin
+
+# Function to get the issueId based on the issue key
+def get_issue_id(issue_key: str, token: str) -> str:
+    print("INTO get_issue_id")
+    token = token.strip('"') 
+    headers = {
+        "Authorization": f'Bearer {token}',
+        "Content-Type": "application/json"
+    }
+
+    query = f"""
+    query {{
+      getTests(jql: "key = '{issue_key}'", limit: 1) {{
+        total
+        results {{
+          issueId
+        }}
+      }}
+    }}
+    """
+
+    payload = {'query': query}
+    response = requests.post(BASE_URL, headers=headers, data=json.dumps(payload))
+    print("THE TOKEN USED IS :",token)
+    print("THE HEADERS ARE :",headers)
+    print("THE RESPONSE IS FROM GET ISSUE ID:",response.text)
+
+    if response.status_code == 200:
+        data = response.json()
+        if data.get('data') and data['data'].get('getTests') and data['data']['getTests']['results']:
+            issue_id = data['data']['getTests']['results'][0]['issueId']
+            return issue_id
+        else:
+            print(f"Issue key '{issue_key}' not found.")
+            return None
+    else:
+        print(f"Error {response.status_code}: {response.text}")
+        return None
+
+# Function to update the test type to "Cucumber" based on the issueId
+def update_test_type_to_cucumber(issue_id,token):
+    print( "****************************INTO update_test_type_to_cucumber****************************")
+    result = False
+    token = token.strip('"') 
+    headers = {
+        "Authorization": f'Bearer {token}',
+        "Content-Type": "application/json"
+    }
+
+    mutation = f"""
+    mutation {{
+      updateTestType(issueId: "{issue_id}", testType: {{name: "Cucumber"}}) {{
+        issueId
+        testType {{
+          name
+        }}
+      }}
+    }}
+    """
+
+    payload = {'query': mutation}
+    response = requests.post(BASE_URL, headers=headers, data=json.dumps(payload))
+
+    if response.status_code == 200:
+        data = response.json()
+        if data.get('data') and data['data'].get('updateTestType'):
+            result = True
+            print(f"Test type for issue ID '{issue_id}' updated to Cucumber successfully.")
+        else:
+            print("Failed to update the test type.")
+            result = False
+    else:
+        print(f"Error {response.status_code}: {response.text}")
+        result = False
+    return result
+
+
 def get_multiple_issue_ids(test_keys: list, token: str) -> dict:
     """Get numeric issueIds for multiple test keys in a single query
     
@@ -304,4 +388,96 @@ def get_issue_id_by_key(test_key, token):
 
     issue_id = results[0]['issueId']
     return issue_id
+
+
+# Function to get the test type (kind and name)
+def get_test_type(issue_id,token):
+    print("************************************INTO get_test_type*********************************")
+    token = token.strip('"') 
+    headers = {
+        "Authorization": f'Bearer {token}',
+        "Content-Type": "application/json"
+    }
+    
+    query = f"""
+    query {{
+      getTest(issueId: "{issue_id}") {{
+        testType {{
+          kind
+          name
+        }}
+      }}
+    }}
+    """
+    payload = {'query': query}
+    response = requests.post(BASE_URL, headers=headers, json=payload)
+    print("THE RESPONSE IS FROM GET TEST TYPE:",response.text)
+
+    if response.status_code == 200:
+        data = response.json()
+        test_type = data.get('data', {}).get('getTest', {}).get('testType')
+        if test_type:
+            return test_type['kind'], test_type['name']
+        else:
+            print(f"Could not determine test type for issue ID '{issue_id}'.")
+            return None, None
+    else:
+        print(f"Error {response.status_code}: {response.text}")
+        return None, None
+
+
+# Function to update the Gherkin steps
+def update_gherkin_steps(issue_id, gherkin_steps,token):
+    print("************************************INTO update_gherkin_steps*********************************")
+    token = token.strip('"') 
+    headers = {
+        "Authorization": f'Bearer {token}',
+        "Content-Type": "application/json"
+    }
+
+    # Escape newlines for GraphQL string
+    #gherkin_steps_escaped = gherkin_steps.replace("\n", "\\n")
+    #gherkin_steps_escaped = gherkin_steps.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n")
+    gherkin_steps_escaped = json.dumps(gherkin_steps)
+
+    mutation = f"""
+    mutation {{
+      updateGherkinTestDefinition(
+        issueId: "{issue_id}",
+        gherkin: "{gherkin_steps_escaped}"
+      ) {{
+        issueId
+      }}
+    }}
+    """
+    payload = {'query': mutation}
+    response = requests.post(BASE_URL, headers=headers, json=payload)
+
+    if response.status_code == 200:
+        data = response.json()
+        if 'errors' in data:
+            print("Mutation failed with errors:", json.dumps(data['errors'], indent=2))
+        else:
+            print(f"Gherkin steps for issue ID '{issue_id}' updated successfully.")
+    else:
+        print(f"Error {response.status_code}: {response.text}")
+
+
+# Combined function to safely update Gherkin steps by issue key
+def update_gherkin_for_issue(issue_key, gherkin_steps,token):
+    print("INTO update_gherkin_for_issue")
+    issue_id = get_issue_id(issue_key,token)
+    print("THE ISSUE ID IS:", issue_id)
+    if not issue_id:
+        return
+    
+    if issue_id:
+        update_test_type_to_cucumber(issue_id,token)
+
+    kind, name = get_test_type(issue_id,token)
+    if kind != "Gherkin":
+        print(f"Cannot update: Test type is '{name}' (kind: {kind}) — must be 'Cucumber' (gherkin)!")
+        return
+
+    update_gherkin_steps(issue_id, gherkin_steps,token)
 
