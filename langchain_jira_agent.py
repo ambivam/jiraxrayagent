@@ -1,6 +1,7 @@
 import os
 import re
 import json
+import time
 from dotenv import load_dotenv
 from typing import Optional
 from langchain_openai import ChatOpenAI
@@ -10,7 +11,7 @@ from langchain.prompts import MessagesPlaceholder
 from langchain.memory import ConversationBufferMemory
 import requests
 from jira_client import create_issue
-from xray_client import authenticate, add_test_steps
+from xray_client import authenticate, add_test_steps, get_issue_id_from_key, set_cucumber_type, get_multiple_issue_ids, set_multiple_cucumber_types
 
 # Load environment variables
 load_dotenv()
@@ -53,109 +54,148 @@ class CreateJiraTestTool(BaseTool):
     name: str = "create_jira_test"
     description: str = "Creates a new test issue in JIRA, sets its test type, and adds scenario steps as Xray test steps"
 
-    def set_test_type_graphql(self, issue_key: str, test_type: str, token: str):
-        # First, get the numeric ID for the issue
-        get_issue_query = {
-            "query": f"""
-            query {{
-                getTests(jql: "key = {issue_key}", limit: 1) {{
-                    results {{
-                        issueId
-                    }}
-                }}
-            }}
-            """
-        }
-        
-        url = "https://xray.cloud.getxray.app/api/v2/graphql"
-        headers = {
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json"
-        }
-        
-        try:
-            # Get numeric ID first
-            id_response = requests.post(url, headers=headers, json=get_issue_query)
-            id_response.raise_for_status()
-            id_data = id_response.json()
-            
-            if "errors" in id_data:
-                return id_data
-                
-            issue_id = id_data.get("data", {}).get("getTests", {}).get("results", [{}])[0].get("issueId")
-            if not issue_id:
-                return {"errors": [{"message": f"Could not find numeric ID for issue {issue_key}"}]}
-                
-            # Now update test type using numeric ID
-            mutation = {
-                "query": f"""
-                mutation {{
-                    updateTestType(
-                        issueId: "{issue_id}",
-                        testType: {{ name: "{test_type}" }}
-                    ) {{
-                        testType {{
-                            name
-                        }}
-                    }}
-                }}
-                """
-            }
-            
-            response = requests.post(url, headers=headers, json=mutation)
-            response.raise_for_status()
-            return response.json()
-                    
-        except requests.exceptions.RequestException as e:
-            print(f"Request failed: {str(e)}")
-            return {"errors": [{"message": f"Request failed: {str(e)}"}]}
-
     def _run(self, feature_file_path: str):
         scenarios = parse_feature_file(feature_file_path)
         token = authenticate()
-        print(f"Token: {token}")
+        print(f"Authenticated with token length: {len(token)}")
 
-        results = []
+        # Step 1: Create all JIRA issues first
+        created_issues = []
+        failed_scenarios = []
+        
+        print(f"Creating {len(scenarios)} JIRA test issues...")
         for scenario in scenarios:
-            # Create JIRA issue
-            payload = {
-                "fields": {
-                    "project": {"key": os.getenv("JIRA_PROJECT_KEY")},
-                    "summary": scenario['title'],
-                    "description": create_adf_paragraph("Created by LangChain agent"),
-                    "issuetype": {"name": "Test"}
-                }
-            }
+            try:
+                # Create JIRA issue with retry
+                for attempt in range(3):
+                    try:
+                        payload = {
+                            "fields": {
+                                "project": {"key": os.getenv("JIRA_PROJECT_KEY")},
+                                "summary": scenario['title'],
+                                "description": create_adf_paragraph("Created by LangChain agent"),
+                                "issuetype": {"name": "Test"}
+                            }
+                        }
+                        response = create_issue(payload)
+                        if response.status_code == 201:
+                            break
+                        print(f"Attempt {attempt + 1}: Status {response.status_code}")
+                        time.sleep(2)
+                    except Exception as e:
+                        print(f"Attempt {attempt + 1} failed: {str(e)}")
+                        if attempt == 2:
+                            raise
 
-            response = create_issue(payload)
-            issue_key = response.json().get('key')
+                issue_data = response.json() if response.status_code == 201 else None
+                issue_key = issue_data.get('key') if issue_data else None
 
-            if issue_key:
-                # Set test type using GraphQL mutation with improved response handling
-                graphql_response = self.set_test_type_graphql(issue_key, "Cucumber", token)
-                
-                if "errors" in graphql_response:
-                    error_msg = graphql_response["errors"][0]["message"]
-                    results.append(f"❌ Failed to set test type for {issue_key}: {error_msg}")
-                    continue
-
-                # Convert scenario steps to Xray test steps
-                steps_payload = []
-                for step in scenario['steps']:
-                    steps_payload.append({
-                        "action": step,
-                        "result": "Expected outcome"
+                if issue_key:
+                    print(f"Created issue: {issue_key}")
+                    created_issues.append({
+                        "key": issue_key,
+                        "scenario": scenario
                     })
-
-                add_steps_response = add_test_steps(issue_key, steps_payload, token)
-                if add_steps_response.status_code != 200 or "errors" in add_steps_response.json():
-                    results.append(f"❌ Failed to add steps for {issue_key}: {add_steps_response.json().get('errors')}")
                 else:
-                    results.append(f"✅ Created {issue_key} with {len(steps_payload)} Xray test steps (type: Cucumber)")
+                    failed_scenarios.append(scenario['title'])
+                    print(f"Failed to create issue for scenario: {scenario['title']}")
 
+            except Exception as e:
+                print(f"Error creating issue for scenario: {str(e)}")
+                failed_scenarios.append(scenario['title'])
+        
+        # Add a significant delay to ensure all issues are created and indexed in JIRA
+        print(f"Waiting for JIRA to process the created issues...")
+        wait_time = 30  # Increased to 30 seconds to ensure JIRA has time to process
+        print(f"Waiting {wait_time} seconds for JIRA indexing...")
+        time.sleep(wait_time)
+        
+        # Step 2: Get all issue IDs in a single batch request
+        if not created_issues:
+            return "❌ No issues were created successfully."
+            
+        test_keys = [issue["key"] for issue in created_issues]
+        print(f"Getting issue IDs for {len(test_keys)} tests...")
+        
+        # Add additional delay before fetching issue IDs to ensure they're available
+        print("Waiting additional time before fetching issue IDs...")
+        time.sleep(20)  # Additional 20 second delay before fetching IDs
+        
+        # Refresh the token to ensure it's valid
+        print("Refreshing authentication token...")
+        token = authenticate()
+        print(f"Token refreshed, new token length: {len(token)}")
+        
+        # Implement retry mechanism for fetching issue IDs
+        max_retries = 5  # Increased to 5 retries
+        retry_delay = 15  # Increased to 15 seconds
+        issue_id_map = {}
+        
+        for attempt in range(max_retries):
+            print(f"Attempt {attempt + 1}/{max_retries} to fetch issue IDs...")
+            issue_id_map = get_multiple_issue_ids(test_keys, token)
+            
+            if issue_id_map and len(issue_id_map) == len(test_keys):
+                print(f"Successfully retrieved all {len(issue_id_map)} issue IDs")
+                break
+            elif issue_id_map:
+                print(f"Retrieved {len(issue_id_map)}/{len(test_keys)} issue IDs, retrying for missing ones...")
+                # Only retry for keys that weren't found
+                test_keys = [key for key in test_keys if key not in issue_id_map]
             else:
-                results.append(f"❌ Failed to create issue for scenario: {scenario['title']}")
-
+                print(f"Failed to retrieve any issue IDs, retrying...")
+            
+            if attempt < max_retries - 1:
+                # If we're still failing after multiple attempts, refresh the token again
+                if attempt >= 2:
+                    print("Refreshing authentication token again...")
+                    token = authenticate()
+                    print(f"Token refreshed, new token length: {len(token)}")
+                
+                print(f"Waiting {retry_delay} seconds before next attempt...")
+                time.sleep(retry_delay)
+        
+        if not issue_id_map:
+            return "❌ Failed to retrieve issue IDs for the created tests."
+            
+        print(f"Retrieved {len(issue_id_map)} issue IDs")
+        
+        # Step 3: Set Cucumber type for all tests
+        issue_ids = list(issue_id_map.values())
+        print(f"Setting Cucumber type for {len(issue_ids)} tests...")
+        
+        cucumber_results = set_multiple_cucumber_types(issue_ids, token)
+        
+        # Step 4: Add steps to each test
+        results = []
+        for issue in created_issues:
+            key = issue["key"]
+            scenario = issue["scenario"]
+            
+            if key not in issue_id_map:
+                results.append(f"❌ Could not find issue ID for {key}")
+                continue
+                
+            issue_id = issue_id_map[key]
+            
+            # Check if Cucumber type was set successfully
+            if not cucumber_results.get(issue_id, False):
+                results.append(f"❌ Failed to set Cucumber type for {key}")
+                continue
+                
+            # Add steps
+            steps = [{"action": step, "result": "Expected outcome"} for step in scenario['steps']]
+            steps_response = add_test_steps(issue_id, steps, token)
+            
+            if "errors" in steps_response:
+                results.append(f"❌ Failed to add steps for {key}")
+            else:
+                results.append(f"✅ Created {key} (ID: {issue_id}) with {len(steps)} steps as Cucumber test")
+        
+        # Add failed scenarios to results
+        for title in failed_scenarios:
+            results.append(f"❌ Failed to create issue for scenario: {title}")
+            
         return "\n".join(results)
 
     def _arun(self, *args, **kwargs):
