@@ -65,7 +65,7 @@ def update_test_type_to_cucumber(issue_id):
         print(f"Error {response.status_code}: {response.text}")
 
 # Example usage:
-issue_key = 'XTT-239'
+issue_key = 'XTT-243'
 issue_id = get_issue_id(issue_key)
 print(f"Issue ID: {issue_id}")
 

@@ -3,6 +3,7 @@ import os
 import json
 import subprocess
 import shlex
+import time
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -38,6 +39,25 @@ def graphql_request(query, token):
         print(f"JSON decode error: {str(e)}")
         print(f"Response content: {response.text}")
         return {"errors": [{"message": "Invalid JSON response"}]}
+
+def graphql_request_with_retry(url, headers, payload, max_retries=3, delay=2):
+    """Make GraphQL request with retry logic for 503 errors"""
+    for attempt in range(max_retries):
+        try:
+            response = requests.post(url, headers=headers, json=payload)
+            if response.status_code == 503:
+                if attempt < max_retries - 1:
+                    print(f"503 error, retrying in {delay} seconds... (attempt {attempt + 1}/{max_retries})")
+                    time.sleep(delay)
+                    continue
+            return response
+        except requests.exceptions.RequestException as e:
+            if attempt < max_retries - 1:
+                print(f"Request failed, retrying... (attempt {attempt + 1}/{max_retries})")
+                time.sleep(delay)
+                continue
+            raise
+    return response
 
 def add_test_steps(issue_id, steps_payload, token):
     steps_graphql = ",".join([
@@ -161,40 +181,21 @@ def get_issue_id_direct(test_key: str, token: str) -> str:
 
 def get_issue_id_from_key(test_key: str, token: str) -> str:
     """Get numeric issueId using the test key"""
+    query = {"query": f"""query {{ getTests(jql: "key = {test_key}", limit: 1) {{ results {{ issueId }} }} }}"""}
+    
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json"
+    }
+    
     try:
-        # Try the direct GraphQL approach first
-        print(f"Fetching issue ID for {test_key} using direct GraphQL approach")
-        issue_id = get_issue_id_direct(test_key, token)
-        if issue_id:
-            return issue_id
-        
-        # If that fails, try a simple approach with minimal escaping
-        print("Trying alternative query format...")
-        simple_payload = {
-            "query": "query { getTests(jql: \"key = " + test_key + "\", limit: 1) { results { issueId } } }"
-        }
-        
-        headers = {
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json"
-        }
-        
-        print(f"Simple payload: {json.dumps(simple_payload)}")
-        response = requests.post(f"{XRAY_API_BASE}/graphql", headers=headers, json=simple_payload)
-        print(f"Response status: {response.status_code}")
-        
+        response = graphql_request_with_retry(f"{XRAY_API_BASE}/graphql", headers, query)
         if response.status_code == 200:
             data = response.json()
-            if "data" in data and data["data"]["getTests"]["results"]:
-                issue_id = data["data"]["getTests"]["results"][0]["issueId"]
-                print(f"Successfully retrieved issue ID via alternative approach: {issue_id} for key: {test_key}")
-                return issue_id
-            else:
-                print(f"No results found in alternative approach for key: {test_key}")
-        
+            return data.get("data", {}).get("getTests", {}).get("results", [{}])[0].get("issueId")
         return None
     except Exception as e:
-        print(f"Error getting issue ID for {test_key}: {str(e)}")
+        print(f"Error getting issue ID: {str(e)}")
         return None
 
 def get_multiple_issue_ids(test_keys: list, token: str) -> dict:
@@ -237,8 +238,12 @@ def set_cucumber_type(issue_id: str, token: str):
         "Content-Type": "application/json"
     }
     
-    response = requests.post(f"{XRAY_API_BASE}/graphql", headers=headers, json=query)
-    return response.status_code == 200
+    try:
+        response = requests.post(f"{XRAY_API_BASE}/graphql", headers=headers, json=query)
+        return response.status_code == 200 and "errors" not in response.json()
+    except Exception as e:
+        print(f"Error setting Cucumber type: {str(e)}")
+        return False
 
 def set_multiple_cucumber_types(issue_ids: list, token: str) -> dict:
     """Set test type to Cucumber for multiple tests
