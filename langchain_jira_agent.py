@@ -54,51 +54,58 @@ class CreateJiraTestTool(BaseTool):
     description: str = "Creates a new test issue in JIRA, sets its test type, and adds scenario steps as Xray test steps"
 
     def set_test_type_graphql(self, issue_key: str, test_type: str, token: str):
+        # First, get the numeric ID for the issue
+        get_issue_query = {
+            "query": f"""
+            query {{
+                getTests(jql: "key = {issue_key}", limit: 1) {{
+                    results {{
+                        issueId
+                    }}
+                }}
+            }}
+            """
+        }
+        
         url = "https://xray.cloud.getxray.app/api/v2/graphql"
         headers = {
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json"
         }
         
-        # Fix the mutation query format
-        query = """
-        mutation updateTestType($issueKey: String!, $testType: String!) {
-            updateTest(
-                issueKey: $issueKey,
-                testType: { name: $testType }
-            ) {
-                test {
-                    issueId
-                    testType {
-                        name
-                    }
-                }
-            }
-        }
-        """
-        
-        variables = {
-            "issueKey": issue_key,
-            "testType": test_type
-        }
-        
-        payload = {
-            "query": query,
-            "variables": variables
-        }
-        
         try:
-            response = requests.post(url, headers=headers, json=payload)
-            response.raise_for_status()  # Raise exception for non-200 status codes
+            # Get numeric ID first
+            id_response = requests.post(url, headers=headers, json=get_issue_query)
+            id_response.raise_for_status()
+            id_data = id_response.json()
             
-            # Try to parse JSON response
-            try:
-                return response.json()
-            except requests.exceptions.JSONDecodeError as e:
-                print(f"Failed to decode JSON response: {str(e)}")
-                print(f"Response content: {response.text}")
-                return {"errors": [{"message": "Invalid JSON response"}]}
+            if "errors" in id_data:
+                return id_data
                 
+            issue_id = id_data.get("data", {}).get("getTests", {}).get("results", [{}])[0].get("issueId")
+            if not issue_id:
+                return {"errors": [{"message": f"Could not find numeric ID for issue {issue_key}"}]}
+                
+            # Now update test type using numeric ID
+            mutation = {
+                "query": f"""
+                mutation {{
+                    updateTestType(
+                        issueId: "{issue_id}",
+                        testType: {{ name: "{test_type}" }}
+                    ) {{
+                        testType {{
+                            name
+                        }}
+                    }}
+                }}
+                """
+            }
+            
+            response = requests.post(url, headers=headers, json=mutation)
+            response.raise_for_status()
+            return response.json()
+                    
         except requests.exceptions.RequestException as e:
             print(f"Request failed: {str(e)}")
             return {"errors": [{"message": f"Request failed: {str(e)}"}]}
@@ -106,6 +113,7 @@ class CreateJiraTestTool(BaseTool):
     def _run(self, feature_file_path: str):
         scenarios = parse_feature_file(feature_file_path)
         token = authenticate()
+        print(f"Token: {token}")
 
         results = []
         for scenario in scenarios:
