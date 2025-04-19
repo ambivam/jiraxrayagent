@@ -73,13 +73,10 @@ def create_adf_description(text: str) -> dict:
 # LangChain Tool to create a test in JIRA and add Xray test steps
 class CreateJiraTestTool(BaseTool):
     name: str = "create_jira_test"
-    description: str = "Creates a new test issue in JIRA, sets its test type, and adds scenario steps as Xray test steps"
+    description: str = "Creates new test issues in JIRA from one or more feature files"
 
-    def _run(self, feature_file_path: str):
+    def process_feature_file(self, feature_file_path: str, token: str) -> list:
         scenarios = parse_feature_file(feature_file_path)
-        token = authenticate()
-        print(f"Token received, length: {len(token)}")
-
         results = []
         for scenario in scenarios:
             try:
@@ -143,11 +140,51 @@ class CreateJiraTestTool(BaseTool):
             except Exception as e:
                 print(f"Error processing scenario: {str(e)}")
                 results.append(f"❌ Error: {str(e)}")
+        return results
+
+    def _run(self, feature_files_input: str):
+        token = authenticate()
+        print(f"Token received, length: {len(token)}")
+
+        # Handle multiple feature files
+        feature_files = [f.strip() for f in feature_files_input.split(',')]
+        all_results = []
         
-        return "\n".join(results)
+        for feature_file in feature_files:
+            is_valid, result = validate_feature_file(feature_file)
+            if not is_valid:
+                all_results.append(f"❌ {result}")
+                continue
+                
+            print(f"\nProcessing feature file: {result}")
+            try:
+                results = self.process_feature_file(result, token)
+                all_results.extend(results)
+            except Exception as e:
+                all_results.append(f"❌ Error processing {result}: {str(e)}")
+
+        return "\n".join(all_results)
 
     def _arun(self, *args, **kwargs):
         raise NotImplementedError("Async not supported")
+
+def validate_feature_file(file_path: str) -> tuple[bool, str]:
+    """Validate that feature file exists and is readable"""
+    if not file_path.endswith('.feature'):
+        return False, f"'{file_path}' is not a feature file"
+    
+    # Add 'features/' prefix if not present
+    if not file_path.startswith('features/'):
+        file_path = f"features/{file_path}"
+    
+    try:
+        with open(file_path, 'r') as f:
+            f.read()
+        return True, file_path
+    except FileNotFoundError:
+        return False, f"File not found: {file_path}"
+    except Exception as e:
+        return False, f"Error reading file: {str(e)}"
 
 # Setup LangChain agent
 llm = ChatOpenAI(
@@ -168,13 +205,44 @@ agent = initialize_agent(
     verbose=True
 )
 
-# Example run
+def parse_natural_language_input(input_text: str) -> list:
+    """Extract feature file paths from natural language input"""
+    # Common patterns for feature files
+    feature_pattern = r'(?:\'|")?(?:features/[\w-]+\.feature|[\w-]+\.feature)(?:\'|")?'
+    feature_files = re.findall(feature_pattern, input_text)
+    
+    # If no files found, check if user just typed the name
+    if not feature_files:
+        words = input_text.split()
+        feature_files = [f"features/{word}.feature" for word in words if word.lower() not in 
+                        {'create', 'test', 'cases', 'from', 'the', 'file', 'and', 'using', 'with'}]
+    
+    return list(set(feature_files))  # Remove duplicates
+
 if __name__ == "__main__":
-    input_prompt = str(input("Enter any of the following similar prompts:\n"+ str(["Parse 'features/payment.feature' and create corresponding test issues in JIRA \n",
-                              "Read the feature file 'features/signup.feature' and generate JIRA tests for each scenario \n",
-                              "Convert all scenarios in 'features/login.feature' into JIRA tests with steps \n",
-                              "Create test cases in JIRA based on scenarios from 'features/orders.feature' \n" ])+"\n"))
-    #prompt = "{Create test issues in JIRA from the scenarios in '"+input_prompt+"'}"
-    prompt = input_prompt
-    result = agent.run(prompt)
-    print(result)
+    print("Enter your request in natural language. Examples:")
+    print("- Create tests from todo.feature")
+    print("- Process features/login.feature and features/signup.feature")
+    print("- Convert scenarios from payment.feature")
+    
+    user_input = input("\nWhat would you like to do? ")
+    feature_files = parse_natural_language_input(user_input)
+    
+    if not feature_files:
+        print("❌ No feature files detected in your input. Please try again.")
+    else:
+        print(f"\nDetected feature files: {', '.join(feature_files)}")
+        # Validate files before processing
+        valid_files = []
+        for file in feature_files:
+            is_valid, result = validate_feature_file(file)
+            if is_valid:
+                valid_files.append(result)
+            else:
+                print(f"❌ {result}")
+        
+        if valid_files:
+            result = agent.run(", ".join(valid_files))
+            print(result)
+        else:
+            print("❌ No valid feature files found. Please check file paths and try again.")
