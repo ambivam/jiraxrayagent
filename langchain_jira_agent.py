@@ -12,7 +12,7 @@ from langchain.memory import ConversationBufferMemory
 import requests
 from jira_client import create_issue
 from xray_client import authenticate, add_test_steps, build_gherkin, get_issue_id, get_issue_id_from_key, set_cucumber_type, get_multiple_issue_ids, set_multiple_cucumber_types, update_gherkin_for_issue, update_test_type_to_cucumber
-from cucumber_test_creator import create_cucumber_test
+
 
 # Load environment variables
 load_dotenv()
